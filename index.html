@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VTU Automation - Acharya Institute of Technology</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <img
+      src="https://gyaanarth.com/wp-content/uploads/2022/06/Acharya-Institute-Of-Technology-Bangalore-logo.jpg"
+      alt="Acharya Institute of Technology Logo"
+      class="logo"
+    />
+
+    <div class="card">
+      <h1>VTU Result Automation</h1>
+      <p class="subtitle">Upload your USN list and get structured results instantly.</p>
+
+      <form id="resultForm">
+        <label for="usnFile" class="file-label">Upload USN List (CSV)</label>
+        <input type="file" id="usnFile" accept=".csv" required />
+
+        <label for="urlInput">Enter VTU Result Page URL</label>
+        <input
+          type="text"
+          id="urlInput"
+          placeholder="https://results.vtu.ac.in/..."
+          required
+        />
+
+        <label for="subjectCodes">Enter Subject Codes</label>
+        <input
+          type="text"
+          id="subjectCodes"
+          placeholder="e.g., BCS501, BCS502, BCS503"
+          required
+        />
+
+        <button type="submit" id="submitBtn">Submit</button>
+      </form>
+
+      <div id="loading" class="hidden">Processing... please wait ⏳</div>
+
+      <div id="resultSection" class="hidden">
+        <p>✅ Result file is ready!</p>
+        <button id="downloadBtn">Download Result</button>
+
+        <div class="analyze-section">
+          <p>Would you like to analyze the result?</p>
+          <button id="analyzeYes" type="button">Yes</button>
+          <button id="analyzeNo" type="button">No</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
