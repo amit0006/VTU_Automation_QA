@@ -17,7 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoAlertPresentException, UnexpectedAlertPresentException
+from selenium.common.exceptions import TimeoutException, NoAlertPresentException, UnexpectedAlertPresentException, WebDriverException
 from test import preprocess_image
 from captcha import save_captcha_from_driver
 from PIL import Image
@@ -25,7 +25,7 @@ import shutil
 import google.generativeai as genai
 import json 
 import sys 
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
 from pathlib import Path 
 
 # ==============================================
@@ -255,6 +255,12 @@ def main():
     for idx, usn in enumerate(USN_LIST, 1):
         print(f"\n🎯 Processing USN {idx}/{total_usns}: {usn}")
         
+        # Add delay between USNs to avoid rate limiting (except for first USN)
+        if idx > 1:
+            delay_between_usns = 2  # 2 seconds delay between USNs
+            print(f"⏳ Waiting {delay_between_usns} seconds before processing next USN...")
+            time.sleep(delay_between_usns)
+        
         # Update status with current USN and screenshot progress
         update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
                           current_usn=usn, phase="screenshots", 
@@ -280,9 +286,36 @@ def main():
             print(f"🔁 Attempt {attempts} for {usn}")
 
             try:
+                # Add delay between retries to avoid rate limiting (exponential backoff)
+                if attempts > 1:
+                    delay = min(2 ** (attempts - 2), 30)  # Max 30 seconds delay
+                    print(f"⏳ Waiting {delay} seconds before retry...")
+                    time.sleep(delay)
+                
                 # Clear cookies and navigate to URL (fresh session for each attempt)
+            try:
                 driver.delete_all_cookies()
+                except Exception as cookie_error:
+                    print(f"⚠️ Could not clear cookies: {cookie_error}")
+                
+                # Navigate to URL with timeout handling
+                try:
+                    driver.set_page_load_timeout(30)  # 30 second timeout for page load
                 driver.get(URL)
+                except TimeoutException:
+                    print(f"❌ Page load timeout. The website may be slow or unreachable.")
+                    continue
+                except WebDriverException as wde:
+                    error_msg = str(wde)
+                    if "ERR_CONNECTION_REFUSED" in error_msg or "net::ERR" in error_msg:
+                        print(f"❌ Connection error: {error_msg}")
+                        print(f"⚠️ The website may be blocking requests or temporarily unavailable.")
+                        # Wait longer for connection errors
+                        if attempts < 10:
+                            time.sleep(5)
+                        continue
+                    else:
+                        raise  # Re-raise if it's a different error
 
                 # Wait for form to load
                 wait = WebDriverWait(driver, 10)
@@ -341,8 +374,28 @@ def main():
                 # Check for alert again just in case the timeout was an alert loop
                 handle_possible_alert() 
                 continue
+            except WebDriverException as wde:
+                error_msg = str(wde)
+                if "ERR_CONNECTION_REFUSED" in error_msg or "net::ERR" in error_msg:
+                    print(f"❌ Connection refused error: {error_msg}")
+                    print(f"⚠️ The website may be blocking automated requests or temporarily unavailable.")
+                    # Wait longer before retrying connection errors
+                    if attempts < 10:
+                        wait_time = min(5 * attempts, 30)  # Progressive wait: 5s, 10s, 15s, etc.
+                        print(f"⏳ Waiting {wait_time} seconds before retry...")
+                        time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ WebDriver error: {error_msg}")
+                continue
             except Exception as e:
-                print(f"❌ Unexpected error occurred: {e}")
+                error_msg = str(e)
+                print(f"❌ Unexpected error occurred: {error_msg}")
+                # Check if it's a connection-related error
+                if "connection" in error_msg.lower() or "refused" in error_msg.lower():
+                    print(f"⚠️ This appears to be a connection issue. Waiting before retry...")
+                    if attempts < 10:
+                        time.sleep(5)
                 continue
 
         # Check if max attempts reached
@@ -477,6 +530,20 @@ def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list,
     options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
     options.add_argument("--window-size=1920,1080")  # Large window size for full page capture
     options.add_argument("--display=:99")  # Connect to XVFB virtual display
+    
+    # Additional options to handle connection issues and avoid detection
+    options.add_argument("--disable-blink-features=AutomationControlled")  # Avoid detection
+    options.add_argument("--disable-extensions")  # Disable extensions
+    options.add_argument("--disable-plugins")  # Disable plugins
+    options.add_argument("--ignore-certificate-errors")  # Ignore SSL certificate errors
+    options.add_argument("--ignore-ssl-errors")  # Ignore SSL errors
+    options.add_argument("--allow-running-insecure-content")  # Allow insecure content
+    
+    # User agent to appear more like a regular browser (helps avoid blocking)
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # Set page load strategy to avoid waiting for all resources
+    options.page_load_strategy = 'eager'  # Don't wait for all resources to load
 
     # Use explicit path for ChromeDriver (pre-installed in container)
     service = Service(executable_path="/usr/bin/chromedriver") 
@@ -501,6 +568,32 @@ def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list,
 
     # Set URL as global variable for use in main()
     URL = url
+
+    # ==========================================================
+    # STEP 2.5: TEST CONNECTION TO URL
+    # ==========================================================
+    # Test if we can connect to the URL before processing
+    print(f"🔍 Testing connection to {url}...")
+    try:
+        driver.set_page_load_timeout(15)  # 15 second timeout for connection test
+        driver.get(url)
+        print("✅ Connection test successful. Website is accessible.")
+        # Navigate back or close and reopen if needed
+    except Exception as conn_test_error:
+        error_msg = str(conn_test_error)
+        if "ERR_CONNECTION_REFUSED" in error_msg or "net::ERR" in error_msg:
+            print(f"❌ Connection test failed: {error_msg}")
+            print(f"⚠️ WARNING: Cannot connect to {url}")
+            print(f"⚠️ The website may be:")
+            print(f"   - Temporarily down")
+            print(f"   - Blocking automated requests")
+            print(f"   - Requiring authentication")
+            print(f"   - Behind a firewall")
+            print(f"⚠️ Processing will continue but may fail for all USNs.")
+            print(f"⚠️ Please verify the URL is correct and accessible.")
+        else:
+            print(f"⚠️ Connection test warning: {conn_test_error}")
+            print(f"⚠️ Processing will continue...")
 
     # ==========================================================
     # STEP 3: RUN MAIN AUTOMATION LOGIC
