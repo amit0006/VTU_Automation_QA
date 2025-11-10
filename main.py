@@ -86,15 +86,19 @@ JOB_ID = None
 # HELPER FUNCTIONS
 # ==============================================
 
-def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn: str = ""):
+def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn: str = "", 
+                      phase: str = "", screenshots_completed: int = 0, marks_extracted: int = 0):
     """
     Update the status file for the current job (if job_id is set).
     This function is called internally to track progress.
     
     Args:
         total_usns: Total number of USNs to process
-        processed_usns: Number of USNs processed so far
+        processed_usns: Number of USNs processed so far (for backward compatibility)
         current_usn: Currently processing USN
+        phase: Current phase ("screenshots" or "extraction")
+        screenshots_completed: Number of screenshots completed
+        marks_extracted: Number of marks extracted
     """
     global JOB_ID
     if not JOB_ID:
@@ -107,14 +111,26 @@ def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn:
         STATUS_DIR.mkdir(exist_ok=True)
         status_file = STATUS_DIR / f"{JOB_ID}.json"
         
+        # Calculate overall progress: screenshots (0-50%) + extraction (50-100%)
+        # Each phase contributes 50% to total progress
+        if total_usns > 0:
+            screenshot_progress = (screenshots_completed / total_usns) * 50
+            extraction_progress = (marks_extracted / total_usns) * 50
+            progress_percentage = int(screenshot_progress + extraction_progress)
+        else:
+            progress_percentage = 0
+        
         status_data = {
             "job_id": JOB_ID,
             "status": "processing",
             "total_usns": total_usns,
-            "processed_usns": processed_usns,
+            "processed_usns": processed_usns,  # Keep for backward compatibility
             "current_usn": current_usn,
             "error": "",
-            "progress_percentage": int((processed_usns / total_usns * 100)) if total_usns > 0 else 0
+            "phase": phase,  # Current phase: "screenshots" or "extraction"
+            "screenshots_completed": screenshots_completed,
+            "marks_extracted": marks_extracted,
+            "progress_percentage": progress_percentage
         }
         
         with open(status_file, "w") as f:
@@ -228,17 +244,21 @@ def main():
     results_data = []
     saved_usns = []
     total_usns = len(USN_LIST)
-    processed_count = 0
+    screenshots_completed = 0
+    marks_extracted = 0
 
     # Update initial status
-    update_job_status(total_usns=total_usns, processed_usns=0, current_usn="Starting...")
+    update_job_status(total_usns=total_usns, processed_usns=0, current_usn="Starting...", 
+                      phase="screenshots", screenshots_completed=0, marks_extracted=0)
 
     # STEP 1: Save all screenshots
     for idx, usn in enumerate(USN_LIST, 1):
         print(f"\n🎯 Processing USN {idx}/{total_usns}: {usn}")
         
-        # Update status with current USN
-        update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn=usn)
+        # Update status with current USN and screenshot progress
+        update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                          current_usn=usn, phase="screenshots", 
+                          screenshots_completed=screenshots_completed, marks_extracted=0)
         
         attempts = 0
         screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
@@ -247,7 +267,11 @@ def main():
         if os.path.exists(screenshot_path):
             print(f"⏭️ Screenshot already exists: {screenshot_path}. Skipping Selenium.")
             saved_usns.append(usn)
-            processed_count += 1
+            screenshots_completed += 1
+            # Update status after skipping
+            update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                              current_usn=usn, phase="screenshots", 
+                              screenshots_completed=screenshots_completed, marks_extracted=0)
             continue
 
         # Retry loop: attempt up to 10 times per USN
@@ -303,7 +327,11 @@ def main():
                 print("🖼️ Capturing screenshot directly...")
                 if take_full_page_screenshot(usn):
                     saved_usns.append(usn)
-                    processed_count += 1
+                    screenshots_completed += 1
+                    # Update status after successful screenshot
+                    update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                                      current_usn=usn, phase="screenshots", 
+                                      screenshots_completed=screenshots_completed, marks_extracted=0)
                     break  # Success, move to next USN
                 else:
                     continue  # Retry if screenshot failed to save
@@ -321,35 +349,62 @@ def main():
         if attempts >= 10:
             print(f"⚠️ Max attempts reached for {usn}. Moving on.")
             results_data.append({"USN": usn, "Result": "❌ Screenshot not saved"})
-            processed_count += 1
+            screenshots_completed += 1
+            # Update status even for failed screenshots
+            update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                              current_usn=usn, phase="screenshots", 
+                              screenshots_completed=screenshots_completed, marks_extracted=0)
         else:
             results_data.append({"USN": usn, "Result": "✅ Screenshot saved"})
 
-    # Update status: Screenshots complete
-    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Extracting marks...")
+    # Update status: Screenshots complete, starting extraction
+    update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                      current_usn="Starting mark extraction...", phase="extraction", 
+                      screenshots_completed=screenshots_completed, marks_extracted=0)
 
     # STEP 2: Extract marks from screenshots
     print("\n📊 Starting marks extraction for all saved screenshots...\n")
     marks_extracted = 0
+    total_screenshots = len(saved_usns)
     
     for idx, usn in enumerate(saved_usns, 1):
         screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
+        
+        # Update status with current USN being processed for mark extraction
+        update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                          current_usn=usn, phase="extraction", 
+                          screenshots_completed=screenshots_completed, marks_extracted=marks_extracted)
+        
         try:
             # Call marks.py to extract marks using Gemini AI
             subprocess.run(["python", "marks.py", screenshot_path], check=True)
-            print(f"✅ Marks extracted for {usn} ({idx}/{len(saved_usns)})")
+            print(f"✅ Marks extracted for {usn} ({idx}/{total_screenshots})")
             marks_extracted += 1
+            
+            # Update status after successful mark extraction
+            update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                              current_usn=usn, phase="extraction", 
+                              screenshots_completed=screenshots_completed, marks_extracted=marks_extracted)
         except Exception as e:
             print(f"❌ Failed to extract marks for {usn}: {e}")
             results_data.append({"USN": usn, "Result": "❌ Failed to extract marks"})
+            # Still update status even if extraction failed
+            marks_extracted += 1  # Count it as processed
+            update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                              current_usn=usn, phase="extraction", 
+                              screenshots_completed=screenshots_completed, marks_extracted=marks_extracted)
 
     # Save summary CSV
     df = pd.DataFrame(results_data)
     df.to_csv("vtu_results.csv", index=False)
     print("\n📁 All results saved to 'vtu_results.csv'")
 
-    # Update status: Marks extraction complete
-    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Marks extraction complete")
+    # Update status: All processing complete
+    # Note: The status will be updated to "completed" by the app.py background task handler
+    # But we update the phase to indicate completion
+    update_job_status(total_usns=total_usns, processed_usns=screenshots_completed, 
+                      current_usn="Processing complete", phase="completed", 
+                      screenshots_completed=screenshots_completed, marks_extracted=marks_extracted)
 
     # Close browser
     driver.quit()
