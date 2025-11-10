@@ -1,27 +1,50 @@
 <!DOCTYPE html>
+<!--
+  VTU Automation Frontend - HTML Structure
+  This page provides a user interface for uploading USN lists and processing VTU results.
+  The form collects:
+  1. CSV file with USN list
+  2. VTU results website URL
+  3. Subject codes to filter/extract
+  
+  The frontend uses JavaScript (script.js) to handle form submission, status polling, and file download.
+-->
 <html lang="en">
 <head>
+  <!-- Meta tags for proper rendering and character encoding -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  
+  <!-- Page title displayed in browser tab -->
   <title>VTU Automation - Acharya Institute of Technology</title>
+  
+  <!-- Link to external stylesheet for styling -->
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+  <!-- Main container for the entire page -->
   <div class="container">
+    <!-- Institution logo image -->
     <img
       src="https://gyaanarth.com/wp-content/uploads/2022/06/Acharya-Institute-Of-Technology-Bangalore-logo.jpg"
       alt="Acharya Institute of Technology Logo"
       class="logo"
     />
 
+    <!-- Main card containing the form and results -->
     <div class="card">
+      <!-- Page heading -->
       <h1>VTU Result Automation</h1>
       <p class="subtitle">Upload your USN list and get structured results instantly.</p>
 
+      <!-- Form for user input -->
+      <!-- Form submission is handled by JavaScript in script.js -->
       <form id="resultForm">
+        <!-- File input for CSV upload -->
         <label for="usnFile" class="file-label">Upload USN List (CSV)</label>
         <input type="file" id="usnFile" accept=".csv" required />
 
+        <!-- Text input for VTU results URL -->
         <label for="urlInput">Enter VTU Result Page URL</label>
         <input
           type="text"
@@ -30,6 +53,7 @@
           required
         />
 
+        <!-- Text input for subject codes (comma-separated) -->
         <label for="subjectCodes">Enter Subject Codes</label>
         <input
           type="text"
@@ -38,24 +62,33 @@
           required
         />
 
+        <!-- Submit button to start processing -->
         <button type="submit" id="submitBtn">Submit</button>
       </form>
 
+      <!-- Loading indicator (hidden by default, shown during processing) -->
+      <!-- Status messages are updated dynamically by JavaScript -->
       <div id="loading" class="hidden">Processing... please wait ⏳</div>
 
+      <!-- Results section (hidden by default, shown when processing is complete) -->
       <div id="resultSection" class="hidden">
         <p>✅ Result file is ready!</p>
+        <!-- Download button (click handler set by JavaScript) -->
         <button id="downloadBtn">Download Result</button>
 
+        <!-- Optional analysis section -->
         <div class="analyze-section">
           <p>Would you like to analyze the result?</p>
+          <!-- Button to open external analysis dashboard -->
           <button id="analyzeYes" type="button">Yes</button>
+          <!-- Button to reload the page and start over -->
           <button id="analyzeNo" type="button">No</button>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- External JavaScript file for form handling, status polling, and file download -->
   <script src="/static/script.js"></script>
 </body>
 </html>
