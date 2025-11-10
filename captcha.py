@@ -1,4 +1,11 @@
-# This script takes the image of captcha from VTU website and save it into captcha.png
+"""
+VTU CAPTCHA Extraction Module
+This module extracts CAPTCHA images from the VTU results website.
+It locates the CAPTCHA image element and saves it as 'captcha.png' for processing.
+
+The CAPTCHA image is then processed by test.py (preprocessing) and main.py (OCR with Gemini AI).
+"""
+
 import time
 from io import BytesIO
 from PIL import Image
@@ -13,27 +20,36 @@ from selenium.webdriver.support import expected_conditions as EC
 
 def save_captcha_from_driver(driver):
     """
-    Given an existing Selenium driver, find the CAPTCHA image on the page,
-    save it as 'captcha.png', and return True if successful.
+    Extract and save CAPTCHA image from the VTU website.
+    
+    This function:
+    1. Waits for the CAPTCHA image element to appear on the page
+    2. Takes a screenshot of the CAPTCHA element
+    3. Saves it as 'captcha.png' in the current directory
+    
+    Args:
+        driver: Selenium WebDriver instance (must be on the VTU results page)
+        
+    Returns:
+        True if CAPTCHA was successfully saved, False otherwise
     """
     from io import BytesIO
     from PIL import Image
     import time
+    
     try:
-        # Wait for CAPTCHA image element
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.common.by import By
-        
+        # Wait for CAPTCHA image element to appear (identified by 'captcha' in src attribute)
         captcha_element = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//img[contains(@src, 'captcha')]"))
         )
-        time.sleep(2)  # Ensure image fully loads
         
-        # Screenshot CAPTCHA
+        # Small delay to ensure image is fully loaded
+        time.sleep(2)
+        
+        # Take screenshot of the CAPTCHA element
         captcha_png = captcha_element.screenshot_as_png
         
-        # Save the image
+        # Convert to PIL Image and save
         img = Image.open(BytesIO(captcha_png))
         img.save("captcha.png")
         print("✅ CAPTCHA saved as 'captcha.png'")

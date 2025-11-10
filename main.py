@@ -1,4 +1,12 @@
-# # URL = "https://results.vtu.ac.in/JJEcbcs25/index.php"
+"""
+VTU Automation Main Processing Module
+This module handles the core automation logic for processing USN lists:
+1. Screenshot capture from VTU results website
+2. CAPTCHA solving using Gemini AI
+3. Mark extraction from screenshots
+4. Progress tracking and status updates
+"""
+
 import time
 import os
 import openpyxl
@@ -10,7 +18,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoAlertPresentException, UnexpectedAlertPresentException
-# REMOVED: from webdriver_manager.chrome import ChromeDriverManager
 from test import preprocess_image
 from captcha import save_captcha_from_driver
 from PIL import Image
@@ -18,13 +25,16 @@ import shutil
 import google.generativeai as genai
 import json 
 import sys 
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
+from pathlib import Path 
 
 # ==============================================
 # GLOBAL MODEL INITIALIZATION
 # ==============================================
+# Load environment variables from .env file
 load_dotenv() 
 
+# Get Google API key for Gemini AI
 api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
     # Use a warning instead of sys.exit(1) if running as a web service
@@ -32,18 +42,20 @@ if not api_key:
     # Exit is fine if this script is the entry point
     # sys.exit(1) 
 
+# Configure Gemini AI with the API key
 genai.configure(api_key=api_key)
 
-# Initialize the Model object globally
+# Initialize the Model object globally for CAPTCHA solving and mark extraction
 try:
     model = genai.GenerativeModel("gemini-2.5-flash")
-    model.generate_content("ping") 
+    model.generate_content("ping")  # Test connection
     print("✅ Connected to gemini-2.5-flash successfully.")
 except Exception as e:
     print(f"❌ Failed to connect to Gemini API: {e}")
     # sys.exit(1) # Uncomment if this script must fail immediately
 
 # Global Variable Declarations
+# Known subject names (used for validation/filtering if needed)
 KNOWN_SUBJECTS = [
     "MATHEMATICS FOR COMPUTER SCIENCE", "DIGITAL DESIGN & COMPUTER ORGANIZATION",
     "OPERATING SYSTEMS", "DATA STRUCTURES AND APPLICATIONS",
@@ -51,28 +63,83 @@ KNOWN_SUBJECTS = [
     "YOGA", "OBJECT ORIENTED PROGRAMMING WITH JAVA",
     "DATA VISUALIZATION WITH PYTHON"
 ]
+
+# Global Selenium WebDriver instance (initialized in run_pipeline)
 driver = None
-model = model # Use the globally initialized model
+
+# Global Gemini model instance
+model = model
+
+# List of USNs to process (loaded from CSV)
 USN_LIST = []
+
+# VTU results URL (set in run_pipeline)
 URL = ""
-SCREENSHOT_FOLDER = "screenshots" # Defined here for global use
+
+# Folder to store screenshots
+SCREENSHOT_FOLDER = "screenshots"
+
+# Job ID for status tracking (optional, set when called from API)
+JOB_ID = None
 
 # ==============================================
 # HELPER FUNCTIONS
 # ==============================================
 
+def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn: str = ""):
+    """
+    Update the status file for the current job (if job_id is set).
+    This function is called internally to track progress.
+    
+    Args:
+        total_usns: Total number of USNs to process
+        processed_usns: Number of USNs processed so far
+        current_usn: Currently processing USN
+    """
+    global JOB_ID
+    if not JOB_ID:
+        return  # No status tracking if not called from API
+    
+    try:
+        # Import here to avoid circular dependency
+        BASE_DIR = Path(__file__).resolve().parent
+        STATUS_DIR = BASE_DIR / "job_status"
+        STATUS_DIR.mkdir(exist_ok=True)
+        status_file = STATUS_DIR / f"{JOB_ID}.json"
+        
+        status_data = {
+            "job_id": JOB_ID,
+            "status": "processing",
+            "total_usns": total_usns,
+            "processed_usns": processed_usns,
+            "current_usn": current_usn,
+            "error": "",
+            "progress_percentage": int((processed_usns / total_usns * 100)) if total_usns > 0 else 0
+        }
+        
+        with open(status_file, "w") as f:
+            json.dump(status_data, f)
+    except Exception as e:
+        # Don't fail the main process if status update fails
+        print(f"⚠️ Failed to update status: {e}")
+
 def take_full_page_screenshot(usn):
-    """Takes a full page screenshot using the active driver instance."""
+    """
+    Takes a full page screenshot using the active Selenium driver instance.
+    
+    Args:
+        usn: University Seat Number (used for filename)
+        
+    Returns:
+        True if screenshot saved successfully, False otherwise
+    """
     global driver
     screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
     
-    # CRITICAL: Use the native Selenium full-page screenshot
+    # Use the native Selenium screenshot method
+    # The large window size (1920x1080) ensures most content is captured
     try:
-        # driver.get_screenshot_as_file is usually sufficient, but get_full_page...
-        # ...is more reliable for scrolling content if supported by the driver.
         driver.save_screenshot(screenshot_path) 
-        # For full-page, you might need Javascript scrolling if the site is complex.
-        # However, we rely on the large --window-size and the display being loaded correctly.
         print(f"✅ Screenshot saved at: {screenshot_path}")
         return True
     except Exception as e:
@@ -80,26 +147,39 @@ def take_full_page_screenshot(usn):
         return False
 
 def get_captcha_text():
-    """Extract CAPTCHA text using Gemini model (rest of function unchanged)"""
+    """
+    Extract CAPTCHA text from the VTU website using Gemini AI vision model.
+    
+    Process:
+    1. Save CAPTCHA image from the webpage
+    2. Preprocess the image to remove noise
+    3. Use Gemini AI to read the text
+    4. Clean and validate the extracted text
+    
+    Returns:
+        CAPTCHA text string (6 characters) or None if extraction fails
+    """
     global driver, model
-    # ... (function body remains the same as your input) ...
+    
+    # Step 1: Save CAPTCHA image from the webpage
     saved = save_captcha_from_driver(driver)
     if not saved:
         print("❌ Failed to save CAPTCHA image.")
         return None
 
+    # Step 2: Preprocess image to improve OCR accuracy
     processed_image_path = preprocess_image("captcha.png")
     if not processed_image_path:
         print("❌ Failed to preprocess CAPTCHA image.")
         return None
 
     try:
+        # Step 3: Use Gemini vision model for OCR
         img = Image.open(processed_image_path)
-        # Use Gemini vision model for OCR
         response = model.generate_content(["Read the text in this CAPTCHA image clearly and return only the text:", img])
         text = response.text.strip().replace(" ", "")
         
-        # Ensure it meets the expected length
+        # Step 4: Validate and truncate to expected length (6 characters)
         if len(text) > 6:
             text = text[:6]
             
@@ -110,15 +190,22 @@ def get_captcha_text():
         return None
 
 def handle_possible_alert():
-    """Handle alert if present."""
+    """
+    Handle JavaScript alert dialogs that may appear on the page.
+    Common alerts: "USN not found", "Invalid CAPTCHA", etc.
+    
+    Returns:
+        Alert text if alert was present and dismissed, None otherwise
+    """
     global driver
     try:
         alert = driver.switch_to.alert
         alert_text = alert.text
-        alert.accept()
+        alert.accept()  # Dismiss the alert
         print(f"⚠️ Alert Dismissed: {alert_text}")
         return alert_text
     except NoAlertPresentException:
+        # No alert present, which is normal
         return None
 
 # ==============================================
@@ -126,39 +213,64 @@ def handle_possible_alert():
 # ==============================================
 
 def main():
-    global driver, USN_LIST, URL
+    """
+    Main automation function that processes all USNs in the list.
+    
+    Process:
+    1. For each USN, capture screenshot from VTU results page
+    2. Extract marks from screenshots using Gemini AI
+    3. Save results to CSV file
+    
+    The function handles CAPTCHA solving, form submission, and error recovery.
+    """
+    global driver, USN_LIST, URL, JOB_ID
 
     results_data = []
     saved_usns = []
+    total_usns = len(USN_LIST)
+    processed_count = 0
+
+    # Update initial status
+    update_job_status(total_usns=total_usns, processed_usns=0, current_usn="Starting...")
 
     # STEP 1: Save all screenshots
-    for usn in USN_LIST:
-        print(f"\n🎯 Processing USN: {usn}")
+    for idx, usn in enumerate(USN_LIST, 1):
+        print(f"\n🎯 Processing USN {idx}/{total_usns}: {usn}")
+        
+        # Update status with current USN
+        update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn=usn)
+        
         attempts = 0
         screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
 
+        # Skip if screenshot already exists (optimization: avoid re-processing)
         if os.path.exists(screenshot_path):
             print(f"⏭️ Screenshot already exists: {screenshot_path}. Skipping Selenium.")
             saved_usns.append(usn)
+            processed_count += 1
             continue
 
+        # Retry loop: attempt up to 10 times per USN
         while attempts < 10:
             attempts += 1
             print(f"🔁 Attempt {attempts} for {usn}")
 
             try:
+                # Clear cookies and navigate to URL (fresh session for each attempt)
                 driver.delete_all_cookies()
                 driver.get(URL)
 
+                # Wait for form to load
                 wait = WebDriverWait(driver, 10)
                 wait.until(EC.presence_of_element_located((By.NAME, "lns")))
 
+                # Extract and solve CAPTCHA
                 captcha_text = get_captcha_text()
                 if not captcha_text or len(captcha_text) != 6:
                     print("⚠️ Invalid CAPTCHA text length. Retrying...")
                     continue
 
-                # Fill in form
+                # Fill in form fields
                 usn_input = driver.find_element(By.NAME, "lns")
                 captcha_input = driver.find_element(By.NAME, "captchacode")
                 submit_btn = driver.find_element(By.ID, "submit")
@@ -169,15 +281,14 @@ def main():
                 captcha_input.send_keys(captcha_text)
                 submit_btn.click()
 
-                # --- NEW RELIABLE WAIT ---
+                # Wait for result page to load
                 print("✅ CAPTCHA accepted. Waiting for result page to load...")
                 
-                # Wait until a critical element (like the results table) is present
-                # Replace "table-bordered" with the specific class/ID/XPath of the marks table if known
+                # Wait for results table to appear (indicates page loaded)
                 wait.until(EC.presence_of_element_located((By.CLASS_NAME, "table-bordered")))
                 
-                # Small sleep for final rendering stability
-                time.sleep(1) 
+                # Small sleep for final rendering stability (reduced from longer waits)
+                time.sleep(0.5)  # Optimized: reduced from 1 second
                 
                 # Check for alert after result page load (e.g., USN not found)
                 try:
@@ -186,15 +297,16 @@ def main():
                     print(f"❌ Alert after load (e.g., USN invalid): {alert_msg}")
                     continue 
                 except TimeoutException:
-                    pass 
+                    pass  # No alert, which is good
 
-                # Take screenshot directly using the active driver
+                # Take screenshot of the result page
                 print("🖼️ Capturing screenshot directly...")
                 if take_full_page_screenshot(usn):
                     saved_usns.append(usn)
-                    break
+                    processed_count += 1
+                    break  # Success, move to next USN
                 else:
-                    continue # Retry if screenshot failed to save
+                    continue  # Retry if screenshot failed to save
 
             except TimeoutException as te:
                 print(f"❌ Timeout error (page element missing): {te}")
@@ -205,43 +317,78 @@ def main():
                 print(f"❌ Unexpected error occurred: {e}")
                 continue
 
+        # Check if max attempts reached
         if attempts >= 10:
             print(f"⚠️ Max attempts reached for {usn}. Moving on.")
             results_data.append({"USN": usn, "Result": "❌ Screenshot not saved"})
+            processed_count += 1
         else:
             results_data.append({"USN": usn, "Result": "✅ Screenshot saved"})
 
+    # Update status: Screenshots complete
+    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Extracting marks...")
+
     # STEP 2: Extract marks from screenshots
     print("\n📊 Starting marks extraction for all saved screenshots...\n")
-    # This loop is retained, assuming marks.py and json_to_excel.py are correct
-    for usn in saved_usns:
+    marks_extracted = 0
+    
+    for idx, usn in enumerate(saved_usns, 1):
         screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
         try:
-            # Note: You may need to wrap this in xvfb-run if marks.py uses pyautogui/gnome_screenshot
-            # However, marks.py likely uses the Gemini API, so a direct call should be fine.
+            # Call marks.py to extract marks using Gemini AI
             subprocess.run(["python", "marks.py", screenshot_path], check=True)
-            print(f"✅ Marks extracted for {usn}")
+            print(f"✅ Marks extracted for {usn} ({idx}/{len(saved_usns)})")
+            marks_extracted += 1
         except Exception as e:
             print(f"❌ Failed to extract marks for {usn}: {e}")
             results_data.append({"USN": usn, "Result": "❌ Failed to extract marks"})
 
-    # Save summary
+    # Save summary CSV
     df = pd.DataFrame(results_data)
     df.to_csv("vtu_results.csv", index=False)
     print("\n📁 All results saved to 'vtu_results.csv'")
 
+    # Update status: Marks extraction complete
+    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Marks extraction complete")
+
+    # Close browser
     driver.quit()
 
 
-def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list, output_path: str = "vtu_results.csv"): 
+def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list, 
+                 output_path: str = "vtu_results.csv", job_id: str = None): 
+    """
+    Main pipeline function that orchestrates the entire USN processing workflow.
+    
+    Process:
+    1. Clean up old files and folders
+    2. Initialize Selenium WebDriver
+    3. Load USN list from CSV
+    4. Capture screenshots for each USN
+    5. Extract marks from screenshots
+    6. Aggregate results into Excel file
+    
+    Args:
+        usn_csv_path: Path to CSV file containing USN list
+        url: VTU results website URL
+        subject_codes_list: List of subject codes to filter/extract
+        output_path: Path for output CSV (legacy, not used for Excel output)
+        job_id: Optional job ID for status tracking (used by API)
+        
+    Returns:
+        output_path: Path to the output file
+    """
+    global USN_LIST, URL, driver, SCREENSHOT_FOLDER, JOB_ID
 
-    global USN_LIST, URL, driver, SCREENSHOT_FOLDER
+    # Set job ID for status tracking
+    JOB_ID = job_id
 
     EXCEL_FILE = "vtu_structured_results.xlsx"
 
     # ==========================================================
-    # CRITICAL CLEANUP: Delete and Recreate Screenshots Folder
+    # STEP 0: CLEANUP - Delete and Recreate Screenshots Folder
     # ==========================================================
+    # Clean up old screenshots to ensure fresh start
     if os.path.exists(SCREENSHOT_FOLDER):
         try:
             shutil.rmtree(SCREENSHOT_FOLDER)
@@ -252,52 +399,70 @@ def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list, output_p
     os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
     print(f"📘 Created clean folder: {SCREENSHOT_FOLDER}")
 
+    # Clean up old Excel file
     if os.path.exists(EXCEL_FILE):
         os.remove(EXCEL_FILE)
         print(f"🗑️ Deleted old file: {EXCEL_FILE}")
 
+    # Create new Excel workbook
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Results"
     wb.save(EXCEL_FILE)
     print(f"📘 Created new file: {EXCEL_FILE}")
 
-    # Setup Chrome options (using the correct configuration for the container)
+    # ==========================================================
+    # STEP 1: SETUP SELENIUM WEBDRIVER
+    # ==========================================================
+    # Configure Chrome options for headless operation in Docker/container environment
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080") # Ensure large screen size
-    options.add_argument("--display=:99") # Explicitly connect to the XVFB virtual display
+    options.add_argument("--headless=new")  # New headless mode (more stable)
+    options.add_argument("--disable-gpu")  # Disable GPU acceleration
+    options.add_argument("--no-sandbox")  # Required for Docker
+    options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
+    options.add_argument("--window-size=1920,1080")  # Large window size for full page capture
+    options.add_argument("--display=:99")  # Connect to XVFB virtual display
 
-    # CRITICAL FIX: Use the explicit path for the pre-installed ChromeDriver
+    # Use explicit path for ChromeDriver (pre-installed in container)
     service = Service(executable_path="/usr/bin/chromedriver") 
 
+    # Enable browser logging for debugging
     caps = webdriver.DesiredCapabilities.CHROME.copy()
     caps['goog:loggingPrefs'] = {'browser': 'ALL'}
 
-    # Initialize driver
+    # Initialize Chrome WebDriver
     driver = webdriver.Chrome(service=service, options=options)
+    print("✅ Chrome WebDriver initialized")
     
+    # ==========================================================
+    # STEP 2: LOAD USN LIST FROM CSV
+    # ==========================================================
     import pandas as pd 
 
-    # load USNs from passed file
+    # Load USNs from CSV file
     usn_df = pd.read_csv(usn_csv_path)
     USN_LIST = usn_df['USN'].dropna().astype(str).tolist()
+    print(f"📋 Loaded {len(USN_LIST)} USNs from CSV")
 
-    # make URL global so main() can use it
+    # Set URL as global variable for use in main()
     URL = url
 
-    # run your existing logic
+    # ==========================================================
+    # STEP 3: RUN MAIN AUTOMATION LOGIC
+    # ==========================================================
+    # This will capture screenshots and extract marks
     main()  
 
-    # STEP 3: Aggregate JSON files into Excel
+    # ==========================================================
+    # STEP 4: AGGREGATE JSON FILES INTO EXCEL
+    # ==========================================================
     print("📊 Starting JSON to Excel aggregation...")
     
+    # Convert subject codes list to JSON string for subprocess
     subject_codes_json = json.dumps(subject_codes_list)
     
     try:
+        # Call json_to_excel.py to aggregate all JSON results into Excel
         subprocess.run(
             ["python", "json_to_excel.py", subject_codes_json],
             check=True
@@ -306,5 +471,5 @@ def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list, output_p
     except Exception as e:
         print(f"❌ Failed to run json_to_excel.py: {e}")
 
-    # return the output path for download
+    # Return the output path for download
     return output_path
