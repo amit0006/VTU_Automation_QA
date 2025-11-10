@@ -41,35 +41,14 @@ async function pollStatus(jobId) {
 
     const statusData = await response.json();
     
-    // Update loading message with progress based on current phase
-    let progressMsg = "";
-    if (statusData.phase === "screenshots") {
-      // Phase 1: Taking screenshots
-      progressMsg = `Phase 1: Taking screenshots... ${statusData.screenshots_completed || 0}/${statusData.total_usns} USNs (${statusData.progress_percentage || 0}%)`;
-      if (statusData.current_usn) {
-        progressMsg += ` - Processing: ${statusData.current_usn}`;
-      }
-    } else if (statusData.phase === "extraction") {
-      // Phase 2: Extracting marks
-      progressMsg = `Phase 2: Extracting marks... ${statusData.marks_extracted || 0}/${statusData.total_usns} USNs (${statusData.progress_percentage || 0}%)`;
-      if (statusData.current_usn) {
-        progressMsg += ` - Processing: ${statusData.current_usn}`;
-      }
-    } else if (statusData.phase === "completed") {
-      progressMsg = `Processing complete! ${statusData.total_usns} USNs processed (100%)`;
-    } else {
-      // Fallback for backward compatibility
-      progressMsg = statusData.progress_percentage 
-        ? `Processing... ${statusData.processed_usns || 0}/${statusData.total_usns} USNs (${statusData.progress_percentage}%)`
-        : `Processing... ${statusData.current_usn || "Initializing..."}`;
-      if (statusData.current_usn) {
-        progressMsg += ` - ${statusData.current_usn}`;
-      }
-    }
+    // Update loading message with progress
+    const progressMsg = statusData.progress_percentage 
+      ? `Processing... ${statusData.processed_usns}/${statusData.total_usns} USNs (${statusData.progress_percentage}%)`
+      : `Processing... ${statusData.current_usn || "Initializing..."}`;
     updateLoadingMessage(progressMsg);
 
     // Check job status
-    if (statusData.status === "completed" || statusData.phase === "completed") {
+    if (statusData.status === "completed") {
       // Job completed successfully
       clearInterval(pollInterval);
       pollInterval = null;
@@ -78,13 +57,7 @@ async function pollStatus(jobId) {
         // Download the file
         await downloadFile(jobId);
       } else {
-        // Wait a bit and check again, file might still be generating
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        if (statusData.file_ready !== false) {
-          await downloadFile(jobId);
-        } else {
-          throw new Error("Processing completed but file not found.");
-        }
+        throw new Error("Processing completed but file not found.");
       }
     } else if (statusData.status === "failed") {
       // Job failed
