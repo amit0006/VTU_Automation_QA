@@ -43,10 +43,12 @@ def normalize_code(code):
 # CONFIGURATION
 # ==============================================
 # Folder containing JSON files (one per USN screenshot)
-JSON_INPUT_FOLDER = "gemini_json_results"
+# Use absolute path for production compatibility
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+JSON_INPUT_FOLDER = os.path.join(BASE_DIR, "gemini_json_results")
 
-# Output Excel filename
-EXCEL_OUTPUT_FILENAME = "vtu_structured_results.xlsx"
+# Output Excel filename (use absolute path)
+EXCEL_OUTPUT_FILENAME = os.path.join(BASE_DIR, "vtu_structured_results.xlsx")
 
 # Hybrid Canonicalization Cutoffs for fuzzy matching
 # PERMISSIVE_CUTOFF: For general typo correction (e.g., BCS405A vs BCS405A.)
