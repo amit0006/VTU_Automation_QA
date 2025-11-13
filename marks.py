@@ -22,7 +22,9 @@ from PIL import Image
 # CONFIGURATION
 # ==============================================
 # Folder to store JSON output files (one per USN screenshot)
-JSON_OUTPUT_FOLDER = "gemini_json_results"
+# Use absolute path for production compatibility
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+JSON_OUTPUT_FOLDER = os.path.join(BASE_DIR, "gemini_json_results")
 
 # Ensure the output folder exists (creates if it doesn't exist)
 os.makedirs(JSON_OUTPUT_FOLDER, exist_ok=True)

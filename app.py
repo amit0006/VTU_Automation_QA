@@ -45,26 +45,48 @@ def get_status_file_path(job_id: str) -> Path:
 
 
 def update_status(job_id: str, status: str, total_usns: int = 0, processed_usns: int = 0, 
-                  current_usn: str = "", error: str = ""):
+                  current_usn: str = "", error: str = "", phase: int = 1, 
+                  phase1_total: int = 0, phase1_processed: int = 0,
+                  phase2_total: int = 0, phase2_processed: int = 0):
     """
     Update the status file for a job.
     
     Args:
         job_id: Unique identifier for the job
         status: Current status (pending, processing, completed, failed)
-        total_usns: Total number of USNs to process
-        processed_usns: Number of USNs processed so far
+        total_usns: Total number of USNs to process (legacy, for backward compatibility)
+        processed_usns: Number of USNs processed so far (legacy, for backward compatibility)
         current_usn: Currently processing USN
         error: Error message if any
+        phase: Current phase (1 = Screenshots, 2 = Gemini extraction)
+        phase1_total: Total USNs for phase 1 (screenshots)
+        phase1_processed: Processed USNs for phase 1
+        phase2_total: Total USNs for phase 2 (gemini extraction)
+        phase2_processed: Processed USNs for phase 2
     """
+    # Calculate overall progress percentage based on phase
+    if phase == 1:
+        progress_percentage = int((phase1_processed / phase1_total * 50)) if phase1_total > 0 else 0
+    elif phase == 2:
+        # Phase 2 accounts for 50-100% of progress
+        progress_percentage = 50 + int((phase2_processed / phase2_total * 50)) if phase2_total > 0 else 50
+    else:
+        progress_percentage = int((processed_usns / total_usns * 100)) if total_usns > 0 else 0
+    
     status_data = {
         "job_id": job_id,
         "status": status,
-        "total_usns": total_usns,
-        "processed_usns": processed_usns,
+        "total_usns": total_usns or phase1_total,  # Backward compatibility
+        "processed_usns": processed_usns or (phase1_processed if phase == 1 else phase2_processed),
         "current_usn": current_usn,
         "error": error,
-        "progress_percentage": int((processed_usns / total_usns * 100)) if total_usns > 0 else 0
+        "progress_percentage": progress_percentage,
+        "phase": phase,
+        "phase1_total": phase1_total,
+        "phase1_processed": phase1_processed,
+        "phase2_total": phase2_total,
+        "phase2_processed": phase2_processed,
+        "phase_name": "Screenshots" if phase == 1 else "Gemini Extraction" if phase == 2 else "Processing"
     }
     status_file = get_status_file_path(job_id)
     with open(status_file, "w") as f:
@@ -84,17 +106,38 @@ def process_usns_background(job_id: str, temp_csv_path: str, url: str, codes_lis
     """
     try:
         # Update status to processing
-        update_status(job_id, "processing", total_usns=0, processed_usns=0, current_usn="Initializing...")
+        update_status(job_id, "processing", total_usns=0, processed_usns=0, current_usn="Initializing...",
+                      phase=1, phase1_total=0, phase1_processed=0, phase2_total=0, phase2_processed=0)
         
         # Run the pipeline (this will internally update status)
         run_pipeline(temp_csv_path, url, codes_list, job_id=job_id)
         
-        # Mark as completed
-        update_status(job_id, "completed", total_usns=0, processed_usns=0, current_usn="")
+        # Mark as completed - get final status from file if available
+        status_file = get_status_file_path(job_id)
+        if status_file.exists():
+            try:
+                with open(status_file, "r") as f:
+                    final_status = json.load(f)
+                update_status(job_id, "completed", 
+                            total_usns=final_status.get("total_usns", 0),
+                            processed_usns=final_status.get("processed_usns", 0),
+                            current_usn="",
+                            phase=2,
+                            phase1_total=final_status.get("phase1_total", 0),
+                            phase1_processed=final_status.get("phase1_processed", 0),
+                            phase2_total=final_status.get("phase2_total", 0),
+                            phase2_processed=final_status.get("phase2_processed", 0))
+            except Exception:
+                update_status(job_id, "completed", total_usns=0, processed_usns=0, current_usn="",
+                            phase=2, phase1_total=0, phase1_processed=0, phase2_total=0, phase2_processed=0)
+        else:
+            update_status(job_id, "completed", total_usns=0, processed_usns=0, current_usn="",
+                        phase=2, phase1_total=0, phase1_processed=0, phase2_total=0, phase2_processed=0)
         
     except Exception as e:
         # Mark as failed with error message
-        update_status(job_id, "failed", error=str(e))
+        update_status(job_id, "failed", error=str(e), phase=1, 
+                     phase1_total=0, phase1_processed=0, phase2_total=0, phase2_processed=0)
         print(f"❌ Error in background task: {e}")
     finally:
         # Cleanup temp file if exists
@@ -141,7 +184,8 @@ async def process_file(
     print(f"Job ID: {job_id}")
 
     # Initialize status as pending
-    update_status(job_id, "pending", total_usns=0, processed_usns=0, current_usn="Starting...")
+    update_status(job_id, "pending", total_usns=0, processed_usns=0, current_usn="Starting...", 
+                  phase=1, phase1_total=0, phase1_processed=0, phase2_total=0, phase2_processed=0)
 
     # Add background task to process USNs
     background_tasks.add_task(process_usns_background, job_id, temp_csv_path, url, codes_list)
