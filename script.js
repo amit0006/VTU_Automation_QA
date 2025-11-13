@@ -41,28 +41,10 @@ async function pollStatus(jobId) {
 
     const statusData = await response.json();
     
-    // Update loading message with progress - show phase information
-    let progressMsg = "";
-    
-    if (statusData.phase === 1) {
-      // Phase 1: Screenshots
-      const phase1Progress = statusData.phase1_total > 0 
-        ? `${statusData.phase1_processed}/${statusData.phase1_total}` 
-        : "0";
-      progressMsg = `Phase 1 (Screenshots): ${phase1Progress} USNs - ${statusData.current_usn || "Processing..."} (${statusData.progress_percentage}%)`;
-    } else if (statusData.phase === 2) {
-      // Phase 2: Gemini Extraction
-      const phase2Progress = statusData.phase2_total > 0 
-        ? `${statusData.phase2_processed}/${statusData.phase2_total}` 
-        : "0";
-      progressMsg = `Phase 2 (Gemini Extraction): ${phase2Progress} USNs - ${statusData.current_usn || "Processing..."} (${statusData.progress_percentage}%)`;
-    } else {
-      // Fallback for backward compatibility
-      progressMsg = statusData.progress_percentage 
-        ? `Processing... ${statusData.processed_usns}/${statusData.total_usns} USNs (${statusData.progress_percentage}%)`
-        : `Processing... ${statusData.current_usn || "Initializing..."}`;
-    }
-    
+    // Update loading message with progress
+    const progressMsg = statusData.progress_percentage 
+      ? `Processing... ${statusData.processed_usns}/${statusData.total_usns} USNs (${statusData.progress_percentage}%)`
+      : `Processing... ${statusData.current_usn || "Initializing..."}`;
     updateLoadingMessage(progressMsg);
 
     // Check job status
