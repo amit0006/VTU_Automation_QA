@@ -86,22 +86,15 @@ JOB_ID = None
 # HELPER FUNCTIONS
 # ==============================================
 
-def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn: str = "",
-                      phase: int = 1, phase1_total: int = 0, phase1_processed: int = 0,
-                      phase2_total: int = 0, phase2_processed: int = 0):
+def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn: str = ""):
     """
     Update the status file for the current job (if job_id is set).
     This function is called internally to track progress.
     
     Args:
-        total_usns: Total number of USNs to process (legacy, for backward compatibility)
-        processed_usns: Number of USNs processed so far (legacy, for backward compatibility)
+        total_usns: Total number of USNs to process
+        processed_usns: Number of USNs processed so far
         current_usn: Currently processing USN
-        phase: Current phase (1 = Screenshots, 2 = Gemini extraction)
-        phase1_total: Total USNs for phase 1 (screenshots)
-        phase1_processed: Processed USNs for phase 1
-        phase2_total: Total USNs for phase 2 (gemini extraction)
-        phase2_processed: Processed USNs for phase 2
     """
     global JOB_ID
     if not JOB_ID:
@@ -114,29 +107,14 @@ def update_job_status(total_usns: int = 0, processed_usns: int = 0, current_usn:
         STATUS_DIR.mkdir(exist_ok=True)
         status_file = STATUS_DIR / f"{JOB_ID}.json"
         
-        # Calculate overall progress percentage based on phase
-        if phase == 1:
-            progress_percentage = int((phase1_processed / phase1_total * 50)) if phase1_total > 0 else 0
-        elif phase == 2:
-            # Phase 2 accounts for 50-100% of progress
-            progress_percentage = 50 + int((phase2_processed / phase2_total * 50)) if phase2_total > 0 else 50
-        else:
-            progress_percentage = int((processed_usns / total_usns * 100)) if total_usns > 0 else 0
-        
         status_data = {
             "job_id": JOB_ID,
             "status": "processing",
-            "total_usns": total_usns or phase1_total,  # Backward compatibility
-            "processed_usns": processed_usns or (phase1_processed if phase == 1 else phase2_processed),
+            "total_usns": total_usns,
+            "processed_usns": processed_usns,
             "current_usn": current_usn,
             "error": "",
-            "progress_percentage": progress_percentage,
-            "phase": phase,
-            "phase1_total": phase1_total,
-            "phase1_processed": phase1_processed,
-            "phase2_total": phase2_total,
-            "phase2_processed": phase2_processed,
-            "phase_name": "Screenshots" if phase == 1 else "Gemini Extraction" if phase == 2 else "Processing"
+            "progress_percentage": int((processed_usns / total_usns * 100)) if total_usns > 0 else 0
         }
         
         with open(status_file, "w") as f:
@@ -252,19 +230,15 @@ def main():
     total_usns = len(USN_LIST)
     processed_count = 0
 
-    # Update initial status - Phase 1: Screenshots
-    update_job_status(total_usns=total_usns, processed_usns=0, current_usn="Starting...",
-                      phase=1, phase1_total=total_usns, phase1_processed=0,
-                      phase2_total=0, phase2_processed=0)
+    # Update initial status
+    update_job_status(total_usns=total_usns, processed_usns=0, current_usn="Starting...")
 
-    # STEP 1: Save all screenshots (Phase 1)
+    # STEP 1: Save all screenshots
     for idx, usn in enumerate(USN_LIST, 1):
         print(f"\n🎯 Processing USN {idx}/{total_usns}: {usn}")
         
-        # Update status with current USN - Phase 1
-        update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn=usn,
-                          phase=1, phase1_total=total_usns, phase1_processed=processed_count,
-                          phase2_total=0, phase2_processed=0)
+        # Update status with current USN
+        update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn=usn)
         
         attempts = 0
         screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
@@ -351,63 +325,31 @@ def main():
         else:
             results_data.append({"USN": usn, "Result": "✅ Screenshot saved"})
 
-    # Update status: Screenshots complete, starting Phase 2
-    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Starting Gemini extraction...",
-                      phase=2, phase1_total=total_usns, phase1_processed=processed_count,
-                      phase2_total=len(saved_usns), phase2_processed=0)
+    # Update status: Screenshots complete
+    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Extracting marks...")
 
-    # STEP 2: Extract marks from screenshots (Phase 2: Gemini Extraction)
+    # STEP 2: Extract marks from screenshots
     print("\n📊 Starting marks extraction for all saved screenshots...\n")
     marks_extracted = 0
-    phase2_total = len(saved_usns)
     
     for idx, usn in enumerate(saved_usns, 1):
         screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"{usn}_result.png")
-        
-        # Update status for Phase 2 progress
-        update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn=f"Extracting marks for {usn}...",
-                          phase=2, phase1_total=total_usns, phase1_processed=processed_count,
-                          phase2_total=phase2_total, phase2_processed=marks_extracted)
-        
         try:
             # Call marks.py to extract marks using Gemini AI
-            # Use absolute path for production compatibility
-            BASE_DIR = Path(__file__).resolve().parent
-            marks_script = BASE_DIR / "marks.py"
-            abs_screenshot_path = os.path.abspath(screenshot_path)
-            
-            # Use sys.executable to ensure we use the same Python interpreter
-            subprocess.run([sys.executable, str(marks_script), abs_screenshot_path], 
-                         check=True, cwd=str(BASE_DIR))
+            subprocess.run(["python", "marks.py", screenshot_path], check=True)
             print(f"✅ Marks extracted for {usn} ({idx}/{len(saved_usns)})")
             marks_extracted += 1
-            
-            # Update status after successful extraction
-            update_job_status(total_usns=total_usns, processed_usns=processed_count, 
-                            current_usn=f"Extracted marks for {usn} ({idx}/{len(saved_usns)})",
-                            phase=2, phase1_total=total_usns, phase1_processed=processed_count,
-                            phase2_total=phase2_total, phase2_processed=marks_extracted)
         except Exception as e:
             print(f"❌ Failed to extract marks for {usn}: {e}")
             results_data.append({"USN": usn, "Result": "❌ Failed to extract marks"})
-            # Still update progress even if failed
-            marks_extracted += 1
-            update_job_status(total_usns=total_usns, processed_usns=processed_count,
-                            current_usn=f"Failed to extract marks for {usn}",
-                            phase=2, phase1_total=total_usns, phase1_processed=processed_count,
-                            phase2_total=phase2_total, phase2_processed=marks_extracted)
 
-    # Save summary CSV (use absolute path for production)
-    BASE_DIR = Path(__file__).resolve().parent
-    csv_file = BASE_DIR / "vtu_results.csv"
+    # Save summary CSV
     df = pd.DataFrame(results_data)
-    df.to_csv(str(csv_file), index=False)
-    print(f"\n📁 All results saved to '{csv_file}'")
+    df.to_csv("vtu_results.csv", index=False)
+    print("\n📁 All results saved to 'vtu_results.csv'")
 
     # Update status: Marks extraction complete
-    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Marks extraction complete",
-                      phase=2, phase1_total=total_usns, phase1_processed=processed_count,
-                      phase2_total=phase2_total, phase2_processed=marks_extracted)
+    update_job_status(total_usns=total_usns, processed_usns=processed_count, current_usn="Marks extraction complete")
 
     # Close browser
     driver.quit()
@@ -441,10 +383,7 @@ def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list,
     # Set job ID for status tracking
     JOB_ID = job_id
 
-    # Use absolute paths for production compatibility
-    BASE_DIR = Path(__file__).resolve().parent
-    SCREENSHOT_FOLDER = str(BASE_DIR / "screenshots")  # Use absolute path
-    EXCEL_FILE = str(BASE_DIR / "vtu_structured_results.xlsx")  # Use absolute path
+    EXCEL_FILE = "vtu_structured_results.xlsx"
 
     # ==========================================================
     # STEP 0: CLEANUP - Delete and Recreate Screenshots Folder
@@ -524,15 +463,9 @@ def run_pipeline(usn_csv_path: str, url: str, subject_codes_list: list,
     
     try:
         # Call json_to_excel.py to aggregate all JSON results into Excel
-        # Use absolute paths for production compatibility
-        BASE_DIR = Path(__file__).resolve().parent
-        json_to_excel_script = BASE_DIR / "json_to_excel.py"
-        
-        # Use sys.executable to ensure we use the same Python interpreter
         subprocess.run(
-            [sys.executable, str(json_to_excel_script), subject_codes_json],
-            check=True,
-            cwd=str(BASE_DIR)
+            ["python", "json_to_excel.py", subject_codes_json],
+            check=True
         )
         print("✅ Excel aggregation complete.")
     except Exception as e:
