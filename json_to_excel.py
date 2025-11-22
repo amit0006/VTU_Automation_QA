@@ -218,6 +218,49 @@ def ensure_and_sort_subject_headers(ws, new_codes):
             cell2.alignment = Alignment(horizontal="center")
             cell2.font = header_font
 
+def matches_filter(code, filter_set):
+    """
+    Check if a code matches any code in the filter set, considering last letter matching.
+    
+    This function handles cases where:
+    - User provides "BCS405" and JSON has "BCS405A", "BCS405B", etc. -> should match
+    - User provides "BCS405A" and JSON has "BCS405" -> should match
+    - User provides "BCS405A" and JSON has "BCS405B" -> should NOT match (different last letters)
+    
+    Args:
+        code: Normalized code to check
+        filter_set: Set of normalized filter codes
+        
+    Returns:
+        True if code matches any filter code, False otherwise
+    """
+    if not code or not filter_set:
+        return False
+    
+    norm_code = normalize_code(code)
+    if not norm_code:
+        return False
+    
+    # 1. Exact match
+    if norm_code in filter_set:
+        return True
+    
+    # 2. Last letter matching: If code ends with a letter, check if base code is in filter
+    if len(norm_code) > 1 and norm_code[-1].isalpha() and norm_code[-1].isupper():
+        base_code = norm_code[:-1]  # Remove last letter
+        if base_code in filter_set:
+            return True
+    
+    # 3. Reverse check: If any filter code ends with a letter, check if its base matches this code
+    for filter_code in filter_set:
+        if len(filter_code) > 1 and filter_code[-1].isalpha() and filter_code[-1].isupper():
+            filter_base = filter_code[:-1]  # Remove last letter from filter code
+            if filter_base == norm_code:
+                return True
+    
+    return False
+
+
 def canonicalize_code(raw_code, existing_codes):
     """
     Canonicalize subject code by matching it to existing codes or creating a new one.
@@ -225,6 +268,8 @@ def canonicalize_code(raw_code, existing_codes):
     This function uses a hybrid approach:
     - Strict matching for potentially confusing codes (e.g., BCS405 vs BCS406)
     - Permissive matching for general typo correction (e.g., BCS405A vs BCS405A.)
+    - Last letter matching: If code ends with a letter and base code exists, use base code
+      (e.g., BCS405A, BCS405B, BCS405C all map to BCS405 if BCS405 exists)
     
     Args:
         raw_code: Raw subject code extracted from JSON
@@ -242,6 +287,14 @@ def canonicalize_code(raw_code, existing_codes):
     if norm in existing_norm_map:
         return existing_norm_map[norm]
 
+    # 2. Last letter matching: If code ends with a letter (A-Z), check if base code exists
+    # This handles cases like BCS405A, BCS405B, BCS405C -> BCS405
+    if len(norm) > 1 and norm[-1].isalpha() and norm[-1].isupper():
+        base_code = norm[:-1]  # Remove last letter
+        # Check if base code exists in normalized existing codes
+        if base_code in existing_norm_map:
+            return existing_norm_map[base_code]
+
     # Determine cutoff: Strict for codes matching the pattern of confusing VTU codes
     # VTU codes typically follow pattern: [BCV][A-Z]{3}\d{3} (e.g., BCS405, BCS406)
     # For these, use strict matching to avoid confusing similar codes
@@ -250,14 +303,14 @@ def canonicalize_code(raw_code, existing_codes):
     else:
         cutoff = PERMISSIVE_CUTOFF  # 0.86 for general typo correction (e.g., BCS405A vs BCS405A.)
 
-    # 2. Fuzzy match: Find similar codes using string similarity
+    # 3. Fuzzy match: Find similar codes using string similarity
     close = difflib.get_close_matches(norm, list(existing_norm_map.keys()), n=1, cutoff=cutoff) 
 
     if close:
         # Found a similar code, return the canonical version
         return existing_norm_map[close[0]]
     else:
-        # 3. New code: No match found, return normalized code as new canonical code
+        # 4. New code: No match found, return normalized code as new canonical code
         return norm
 
 # Define color fills for Excel cells based on result
@@ -327,14 +380,18 @@ for filename in json_files:
             continue  # Skip subjects without codes
 
         # Canonicalize the extracted code (match to existing or create new)
-        # Use both existing headers and newly found codes for matching
-        current_canonical_set = existing_headers.union(all_canonical_codes_found)
+        # Use existing headers, user-provided codes, and newly found codes for matching
+        # This ensures that if user provides "BCS405", codes like "BCS405A" will be canonicalized to "BCS405"
+        current_canonical_set = existing_headers.union(SUBJECT_CODES_EXPLICIT).union(all_canonical_codes_found)
         canon_code = canonicalize_code(raw_code, current_canonical_set) 
         
         # Filtering logic: Only process subjects in the filter list (if filter is set)
-        if FILTERED_SUBJECT_CODES_NORM and normalize_code(canon_code) not in FILTERED_SUBJECT_CODES_NORM:
-            print(f"   Skipping subject {raw_code} for {usn}: Not in filter list.")
-            continue
+        # Use matches_filter to handle last letter matching (e.g., BCS405 matches BCS405A, BCS405B, etc.)
+        if FILTERED_SUBJECT_CODES_NORM and not matches_filter(canon_code, FILTERED_SUBJECT_CODES_NORM):
+            # Also check the raw code before canonicalization in case canonicalization changed it
+            if not matches_filter(raw_code, FILTERED_SUBJECT_CODES_NORM):
+                print(f"   Skipping subject {raw_code} for {usn}: Not in filter list.")
+                continue
 
         # Add to set of found canonical codes
         all_canonical_codes_found.add(canon_code)
@@ -379,10 +436,16 @@ if FILTERED_SUBJECT_CODES_NORM:
     # 1. Add all canonical codes found in the JSONs (which are already filtered)
     headers_to_use.update(all_canonical_codes_found)
     
-    # 2. Add all existing Excel headers that are in the filter list (to preserve existing data)
+    # 2. Add all existing Excel headers that match the filter (to preserve existing data)
+    # Use matches_filter to handle last letter matching (e.g., BCS405 matches BCS405A)
+    # Also canonicalize existing headers to base codes if they match
     for h in existing_headers:
-        if normalize_code(h) in FILTERED_SUBJECT_CODES_NORM:
-            headers_to_use.add(h)
+        norm_h = normalize_code(h)
+        if matches_filter(h, FILTERED_SUBJECT_CODES_NORM):
+            # Canonicalize the existing header using user-provided codes and found codes
+            # This ensures BCS405A becomes BCS405 if BCS405 is in the filter
+            canon_h = canonicalize_code(h, SUBJECT_CODES_EXPLICIT.union(all_canonical_codes_found))
+            headers_to_use.add(canon_h)
     
     # 3. Add the explicitly passed normalized codes as headers
     # This ensures all expected columns exist, even if no data was found for them
