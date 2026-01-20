@@ -9,6 +9,8 @@ This module handles the core automation logic for processing USN lists:
 
 import time
 import os
+import base64
+import re
 import openpyxl
 import pandas as pd
 import subprocess
@@ -23,6 +25,7 @@ from captcha import save_captcha_from_driver
 from PIL import Image
 import shutil
 import google.generativeai as genai
+from huggingface_hub import InferenceClient
 import json 
 import sys 
 from dotenv import load_dotenv
@@ -33,6 +36,21 @@ from pathlib import Path
 # ==============================================
 # Load environment variables from .env file
 load_dotenv() 
+
+# ==============================================
+# HUGGING FACE (CAPTCHA OCR)
+# ==============================================
+HF_TOKEN = os.getenv("HF_TOKEN")
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Llama-4-Scout-17B-16E-Instruct")
+
+hf_client = None
+if HF_TOKEN:
+    try:
+        hf_client = InferenceClient(model=HF_MODEL_ID, token=HF_TOKEN)
+        print(f"✅ Connected to Hugging Face model for CAPTCHA OCR: {HF_MODEL_ID}")
+    except Exception as e:
+        print(f"❌ Failed to initialize Hugging Face client: {e}")
+        hf_client = None
 
 # Get Google API key for Gemini AI
 api_key = os.getenv("GOOGLE_API_KEY")
@@ -148,18 +166,18 @@ def take_full_page_screenshot(usn):
 
 def get_captcha_text():
     """
-    Extract CAPTCHA text from the VTU website using Gemini AI vision model.
+    Extract CAPTCHA text from the VTU website using Hugging Face vision model.
     
     Process:
     1. Save CAPTCHA image from the webpage
     2. Preprocess the image to remove noise
-    3. Use Gemini AI to read the text
+    3. Use Hugging Face model to read the text
     4. Clean and validate the extracted text
     
     Returns:
         CAPTCHA text string (6 characters) or None if extraction fails
     """
-    global driver, model
+    global driver, hf_client
     
     # Step 1: Save CAPTCHA image from the webpage
     saved = save_captcha_from_driver(driver)
@@ -174,19 +192,63 @@ def get_captcha_text():
         return None
 
     try:
-        # Step 3: Use Gemini vision model for OCR
-        img = Image.open(processed_image_path)
-        response = model.generate_content(["Read the text in this CAPTCHA image clearly and return only the text:", img])
-        text = response.text.strip().replace(" ", "")
+        if not hf_client:
+            print("❌ HF client not initialized. Ensure HF_TOKEN is set in your .env.")
+            return None
+
+        # Step 3: Use Hugging Face vision model for OCR
+        with open(processed_image_path, "rb") as f:
+            base64_image = base64.b64encode(f.read()).decode("utf-8")
+        image_url = f"data:image/png;base64,{base64_image}"
+
+        ocr_prompt = """
+You are an OCR engine.
+Read the CAPTCHA text in the image.
+Return ONLY strictly valid JSON (no markdown, no explanation) in this exact structure:
+{
+  "captcha": "6_char_text"
+}
+Rules:
+- No spaces.
+- Preserve letter case as seen.
+"""
+
+        response = hf_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "text", "text": ocr_prompt},
+                    ],
+                }
+            ],
+            max_tokens=256,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+
+        json_text = response.choices[0].message.content
+        if not isinstance(json_text, str):
+            print("❌ HF returned non-text response for captcha.")
+            return None
+
+        # Defensive JSON extraction (in case provider wraps)
+        txt = json_text.strip()
+        match = re.search(r"\{.*\}", txt, re.DOTALL)
+        if match:
+            txt = match.group(0)
+        data = json.loads(txt)
+        text = str(data.get("captcha", "")).strip().replace(" ", "")
         
         # Step 4: Validate and truncate to expected length (6 characters)
         if len(text) > 6:
             text = text[:6]
             
-        print(f"🔍 Gemini Detected CAPTCHA: {text}")
+        print(f"🔍 HF Detected CAPTCHA: {text}")
         return text
     except Exception as e:
-        print(f"❌ CAPTCHA OCR with Gemini failed: {e}")
+        print(f"❌ CAPTCHA OCR with HF failed: {e}")
         return None
 
 def handle_possible_alert():
