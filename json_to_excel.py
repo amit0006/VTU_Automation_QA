@@ -334,7 +334,19 @@ data_to_write = {}  # Nested dictionary: {USN: {CanonicalCode: {Internal: 40, Ex
 print("🔎 Starting JSON file iteration and data collection...")
 
 # Find all JSON files in the input folder (files ending with '_gemini_output.json')
-json_files = [f for f in os.listdir(JSON_INPUT_FOLDER) if f.endswith('_gemini_output.json')]
+if not os.path.exists(JSON_INPUT_FOLDER):
+    print("⚠️ JSON folder not found. No results to process.")
+    sys.exit(0)
+
+json_files = [
+    f for f in os.listdir(JSON_INPUT_FOLDER)
+    if f.endswith('_gemini_output.json')
+]
+
+if not json_files:
+    print("⚠️ No JSON result files found. Skipping Excel generation.")
+    sys.exit(0)
+
 
 # Check if any JSON files exist
 if not json_files:
