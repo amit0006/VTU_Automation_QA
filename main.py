@@ -46,7 +46,11 @@ HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Llama-4-Scout-17B-16E-Instruc
 hf_client = None
 if HF_TOKEN:
     try:
-        hf_client = InferenceClient(model=HF_MODEL_ID, token=HF_TOKEN)
+        hf_client = InferenceClient(
+            model=HF_MODEL_ID,
+            token=HF_TOKEN,
+            base_url="https://router.huggingface.co"
+        )
         print(f"✅ Connected to Hugging Face model for CAPTCHA OCR: {HF_MODEL_ID}")
     except Exception as e:
         print(f"❌ Failed to initialize Hugging Face client: {e}")

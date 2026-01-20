@@ -55,7 +55,12 @@ if not HF_TOKEN:
 HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Llama-4-Scout-17B-16E-Instruct")
 
 try:
-    client = InferenceClient(model=HF_MODEL_ID, token=HF_TOKEN)
+    client = InferenceClient(
+        model=HF_MODEL_ID,
+        token=HF_TOKEN,
+        base_url="https://router.huggingface.co"
+    )
+
     print(f"[ok] Hugging Face client initialized: {HF_MODEL_ID}")
 except Exception as e:
     print(f"ERROR: Failed to initialize Hugging Face client: {e}")
